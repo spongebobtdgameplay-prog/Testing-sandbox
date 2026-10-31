@@ -21,6 +21,7 @@ let peerConnection = null;
 let localStream = null;
 let remoteStream = null;
 let rtcConfiguration = { iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] };
+let turnAvailable = false;
 let pendingIceCandidates = [];
 let searchTimer = null;
 let searchRequestId = 0;
@@ -127,9 +128,17 @@ async function enterApp(user) {
 async function loadRtcConfiguration() {
   try {
     const data = await api("/api/config");
-    if (data && data.rtcConfiguration) rtcConfiguration = data.rtcConfiguration;
-  } catch (_error) {
-    // STUN fallback remains available if optional configuration cannot load.
+    if (data && data.rtcConfiguration && Array.isArray(data.rtcConfiguration.iceServers)) {
+      rtcConfiguration = data.rtcConfiguration;
+      turnAvailable = data.turnConfigured === true || rtcConfiguration.iceServers.some((server) => {
+        const urls = Array.isArray(server?.urls) ? server.urls : [server?.urls];
+        return urls.some((url) => typeof url === "string" && /^turns?:/i.test(url));
+      });
+    }
+  } catch (error) {
+    turnAvailable = false;
+    console.warn("TURN configuration could not be loaded:", error?.code || error?.name || "unknown");
+    // Preserve STUN so direct connections can still work while TURN is unavailable.
   }
 }
 
@@ -692,7 +701,9 @@ async function ensurePeerConnection() {
       activeCall.state = "connected";
       renderCall();
     } else if (state === "failed") {
-      $("#callStatus").textContent = "Could not connect. A TURN relay may be needed on this network.";
+      $("#callStatus").textContent = turnAvailable
+        ? "The relay connection failed too. Check whether this network blocks TURN traffic, then try again."
+        : "The direct connection failed and no TURN relay credentials were loaded. Configure Cloudflare TURN on the server.";
     } else if (state === "disconnected") {
       $("#callStatus").textContent = "Reconnecting media…";
     }
