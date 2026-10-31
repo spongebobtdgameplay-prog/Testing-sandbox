@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#11121a">
   <meta name="description" content="Testing Sandbox — friends, presence, and private voice/video calls.">
   <title>Testing Sandbox</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=4">
   <script src="/socket.io/socket.io.js" defer></script>
-  <script src="/app.js" defer></script>
+  <script src="/app.js?v=4" defer></script>
 </head>
 <body>
   <div class="ambient ambient-one"></div>
@@ -50,6 +50,7 @@
       </div>
       <div class="topbar-right">
         <span id="connectionState" class="connection-state"><i></i> Connecting</span>
+        <button id="enableNotifications" class="notification-button" type="button">Enable notifications</button>
         <div class="account-chip"><span id="avatarLetter" class="avatar avatar-small">?</span><span id="topUsername">Player</span></div>
         <button id="logoutButton" class="icon-button" type="button" aria-label="Sign out" title="Sign out">↗</button>
       </div>
