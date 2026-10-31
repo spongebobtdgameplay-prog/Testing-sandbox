@@ -223,3 +223,7 @@ button { cursor: pointer; }
   .action-card p { max-width: 220px; }
   .secure-tag { margin-left: 51px; }
 }
+
+.notification-button { flex: 0 0 auto; padding: 8px 10px; border: 1px solid rgba(171,153,255,.2); border-radius: 9px; color: #e3ddff; background: rgba(145,121,255,.11); font-size: 10px; font-weight: 700; white-space: nowrap; }
+.notification-button:disabled { opacity: .65; cursor: default; }
+@media (max-width: 390px) { .topbar-right { gap: 9px; } .notification-button { padding: 7px 8px; font-size: 9px; } }
