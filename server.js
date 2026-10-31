@@ -15,7 +15,7 @@ const { Server } = require("socket.io");
 const PORT = Number(process.env.PORT || 10000);
 const COOKIE_NAME = "sandbox_session";
 const SESSION_DAYS = 30;
-const isProduction = process.env.NODE_ENV === "production";
+const isProduction = process.env.NODE_ENV === "production" || Boolean(process.env.RENDER);
 const pool = process.env.DATABASE_URL
   ? new Pool({
       connectionString: process.env.DATABASE_URL,
@@ -123,7 +123,7 @@ async function requireAuth(req, res, next) {
   }
   try {
     const result = await pool.query(
-      "SELECT u.id, u.username, s.id AS session_id FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > NOW()",
+      "SELECT u.id, u.username, s.id AS session_id FROM sandbox_sessions s JOIN sandbox_users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > NOW()",
       [sha256(token)]
     );
     if (!result.rowCount) {
@@ -131,7 +131,7 @@ async function requireAuth(req, res, next) {
       return res.status(401).json({ error: "Your session has expired. Please sign in again.", code: "AUTH_REQUIRED" });
     }
     req.user = result.rows[0];
-    pool.query("UPDATE sessions SET last_seen_at = NOW() WHERE id = $1", [req.user.session_id]).catch(() => {});
+    pool.query("UPDATE sandbox_sessions SET last_seen_at = NOW() WHERE id = $1", [req.user.session_id]).catch(() => {});
     next();
   } catch (error) {
     console.error("Authentication lookup failed:", error.message);
@@ -143,7 +143,7 @@ async function createSession(userId, res) {
   const token = crypto.randomBytes(32).toString("base64url");
   const id = crypto.randomUUID();
   await pool.query(
-    "INSERT INTO sessions (id, user_id, token_hash, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '30 days')",
+    "INSERT INTO sandbox_sessions (id, user_id, token_hash, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '30 days')",
     [id, userId, sha256(token)]
   );
   setSessionCookie(res, token);
@@ -151,34 +151,34 @@ async function createSession(userId, res) {
 
 async function migrateDatabase() {
   await pool.query(
-    "CREATE TABLE IF NOT EXISTS users (" +
+    "CREATE TABLE IF NOT EXISTS sandbox_users (" +
     "id UUID PRIMARY KEY, " +
     "username VARCHAR(24) NOT NULL, " +
     "password_hash TEXT NOT NULL, " +
     "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()" +
     "); " +
-    "CREATE UNIQUE INDEX IF NOT EXISTS users_username_ci_unique ON users (LOWER(username)); " +
-    "CREATE TABLE IF NOT EXISTS sessions (" +
+    "CREATE UNIQUE INDEX IF NOT EXISTS sandbox_users_username_ci_unique ON sandbox_users (LOWER(username)); " +
+    "CREATE TABLE IF NOT EXISTS sandbox_sessions (" +
     "id UUID PRIMARY KEY, " +
-    "user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, " +
+    "user_id UUID NOT NULL REFERENCES sandbox_users(id) ON DELETE CASCADE, " +
     "token_hash CHAR(64) NOT NULL UNIQUE, " +
     "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), " +
     "last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), " +
     "expires_at TIMESTAMPTZ NOT NULL" +
     "); " +
-    "CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions(user_id); " +
-    "CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at); " +
-    "CREATE TABLE IF NOT EXISTS friend_requests (" +
+    "CREATE INDEX IF NOT EXISTS sandbox_sessions_user_id_idx ON sandbox_sessions(user_id); " +
+    "CREATE INDEX IF NOT EXISTS sandbox_sessions_expiry_idx ON sandbox_sessions(expires_at); " +
+    "CREATE TABLE IF NOT EXISTS sandbox_friend_requests (" +
     "id UUID PRIMARY KEY, " +
-    "requester_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, " +
-    "recipient_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE, " +
+    "requester_id UUID NOT NULL REFERENCES sandbox_users(id) ON DELETE CASCADE, " +
+    "recipient_id UUID NOT NULL REFERENCES sandbox_users(id) ON DELETE CASCADE, " +
     "status VARCHAR(12) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'declined')), " +
     "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), " +
     "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), " +
     "CHECK (requester_id <> recipient_id)" +
     "); " +
-    "CREATE INDEX IF NOT EXISTS friend_requests_requester_idx ON friend_requests(requester_id, status); " +
-    "CREATE INDEX IF NOT EXISTS friend_requests_recipient_idx ON friend_requests(recipient_id, status);"
+    "CREATE INDEX IF NOT EXISTS sandbox_friend_requests_requester_idx ON sandbox_friend_requests(requester_id, status); " +
+    "CREATE INDEX IF NOT EXISTS sandbox_friend_requests_recipient_idx ON sandbox_friend_requests(recipient_id, status);"
   );
 }
 
@@ -192,7 +192,7 @@ async function broadcastPresence(userId, isOnline) {
   try {
     const result = await pool.query(
       "SELECT CASE WHEN requester_id = $1 THEN recipient_id ELSE requester_id END AS friend_id " +
-      "FROM friend_requests WHERE status = 'accepted' AND (requester_id = $1 OR recipient_id = $1)",
+      "FROM sandbox_friend_requests WHERE status = 'accepted' AND (requester_id = $1 OR recipient_id = $1)",
       [userId]
     );
     for (const row of result.rows) {
@@ -227,12 +227,13 @@ app.get("/api/config", (_req, res) => {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
-  if (turnUrls.length && process.env.TURN_USERNAME && process.env.TURN_CREDENTIAL) {
-    iceServers.push({
-      urls: turnUrls,
-      username: process.env.TURN_USERNAME,
-      credential: process.env.TURN_CREDENTIAL
-    });
+  if (turnUrls.length && process.env.TURN_SHARED_SECRET) {
+    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+    const username = expiresAt + ":" + crypto.randomUUID();
+    const credential = crypto.createHmac("sha1", process.env.TURN_SHARED_SECRET)
+      .update(username)
+      .digest("base64");
+    iceServers.push({ urls: turnUrls, username, credential });
   }
   res.json({ rtcConfiguration: { iceServers, iceCandidatePoolSize: 4 } });
 });
@@ -250,7 +251,7 @@ app.post("/api/auth/register", authLimiter, requireDatabase, async (req, res) =>
     const passwordHash = await bcrypt.hash(password, 12);
     const userId = crypto.randomUUID();
     const result = await pool.query(
-      "INSERT INTO users (id, username, password_hash) VALUES ($1, $2, $3) RETURNING id, username, created_at",
+      "INSERT INTO sandbox_users (id, username, password_hash) VALUES ($1, $2, $3) RETURNING id, username, created_at",
       [userId, username, passwordHash]
     );
     await createSession(userId, res);
@@ -272,7 +273,7 @@ app.post("/api/auth/login", authLimiter, requireDatabase, async (req, res) => {
   }
   try {
     const result = await pool.query(
-      "SELECT id, username, password_hash FROM users WHERE LOWER(username) = LOWER($1)",
+      "SELECT id, username, password_hash FROM sandbox_users WHERE LOWER(username) = LOWER($1)",
       [username]
     );
     const user = result.rows[0];
@@ -291,7 +292,7 @@ app.post("/api/auth/login", authLimiter, requireDatabase, async (req, res) => {
 app.post("/api/auth/logout", async (req, res) => {
   const token = req.cookies[COOKIE_NAME];
   if (pool && token) {
-    pool.query("DELETE FROM sessions WHERE token_hash = $1", [sha256(token)]).catch(() => {});
+    pool.query("DELETE FROM sandbox_sessions WHERE token_hash = $1", [sha256(token)]).catch(() => {});
   }
   clearSessionCookie(res);
   res.status(204).end();
@@ -301,22 +302,22 @@ app.get("/api/me", requireAuth, (req, res) => {
   res.json({ user: { id: req.user.id, username: req.user.username } });
 });
 
-app.get("/api/users/search", requireAuth, async (req, res) => {
+app.get("/api/sandbox_users/search", requireAuth, async (req, res) => {
   const query = String(req.query.q || "").trim();
   if (query.length < 2 || query.length > 24) {
-    return res.json({ users: [] });
+    return res.json({ sandbox_users: [] });
   }
   try {
     const result = await pool.query(
-      "SELECT u.id, u.username FROM users u " +
+      "SELECT u.id, u.username FROM sandbox_users u " +
       "WHERE u.id <> $1 AND LOWER(u.username) LIKE LOWER($2) " +
-      "AND NOT EXISTS (SELECT 1 FROM friend_requests fr WHERE fr.status = 'accepted' " +
+      "AND NOT EXISTS (SELECT 1 FROM sandbox_friend_requests fr WHERE fr.status = 'accepted' " +
       "AND ((fr.requester_id = $1 AND fr.recipient_id = u.id) " +
       "OR (fr.requester_id = u.id AND fr.recipient_id = $1))) " +
       "ORDER BY LOWER(u.username) LIMIT 20",
       [req.user.id, "%" + query.replace(/[%_]/g, "\\$&") + "%"]
     );
-    res.json({ users: result.rows.map((user) => ({ ...user, online: online(user.id) })) });
+    res.json({ sandbox_users: result.rows.map((user) => ({ ...user, online: online(user.id) })) });
   } catch (error) {
     console.error("User search failed:", error.message);
     res.status(500).json({ error: "Search is temporarily unavailable." });
@@ -327,8 +328,8 @@ app.get("/api/friends", requireAuth, async (req, res) => {
   try {
     const [friends, requests] = await Promise.all([
       pool.query(
-        "SELECT u.id, u.username FROM friend_requests fr " +
-        "JOIN users u ON u.id = CASE WHEN fr.requester_id = $1 THEN fr.recipient_id ELSE fr.requester_id END " +
+        "SELECT u.id, u.username FROM sandbox_friend_requests fr " +
+        "JOIN sandbox_users u ON u.id = CASE WHEN fr.requester_id = $1 THEN fr.recipient_id ELSE fr.requester_id END " +
         "WHERE fr.status = 'accepted' AND (fr.requester_id = $1 OR fr.recipient_id = $1) " +
         "ORDER BY LOWER(u.username)",
         [req.user.id]
@@ -336,8 +337,8 @@ app.get("/api/friends", requireAuth, async (req, res) => {
       pool.query(
         "SELECT fr.id, fr.requester_id, fr.recipient_id, fr.created_at, u.username, " +
         "CASE WHEN fr.requester_id = $1 THEN 'outgoing' ELSE 'incoming' END AS direction " +
-        "FROM friend_requests fr " +
-        "JOIN users u ON u.id = CASE WHEN fr.requester_id = $1 THEN fr.recipient_id ELSE fr.requester_id END " +
+        "FROM sandbox_friend_requests fr " +
+        "JOIN sandbox_users u ON u.id = CASE WHEN fr.requester_id = $1 THEN fr.recipient_id ELSE fr.requester_id END " +
         "WHERE fr.status = 'pending' AND (fr.requester_id = $1 OR fr.recipient_id = $1) " +
         "ORDER BY fr.created_at DESC",
         [req.user.id]
@@ -359,11 +360,11 @@ app.post("/api/friends/requests", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Choose a valid player." });
   }
   try {
-    const target = await pool.query("SELECT id FROM users WHERE id = $1", [recipientId]);
+    const target = await pool.query("SELECT id FROM sandbox_users WHERE id = $1", [recipientId]);
     if (!target.rowCount) return res.status(404).json({ error: "Player not found." });
 
     const existing = await pool.query(
-      "SELECT id, status, requester_id, recipient_id FROM friend_requests " +
+      "SELECT id, status, requester_id, recipient_id FROM sandbox_friend_requests " +
       "WHERE (requester_id = $1 AND recipient_id = $2) " +
       "OR (requester_id = $2 AND recipient_id = $1) " +
       "ORDER BY created_at DESC LIMIT 1",
@@ -377,7 +378,7 @@ app.post("/api/friends/requests", requireAuth, async (req, res) => {
 
     const id = crypto.randomUUID();
     await pool.query(
-      "INSERT INTO friend_requests (id, requester_id, recipient_id, status) VALUES ($1, $2, $3, 'pending')",
+      "INSERT INTO sandbox_friend_requests (id, requester_id, recipient_id, status) VALUES ($1, $2, $3, 'pending')",
       [id, req.user.id, recipientId]
     );
     io.to("user:" + recipientId).emit("friend:request", {
@@ -399,7 +400,7 @@ app.post("/api/friends/requests/:requestId/respond", requireAuth, async (req, re
   }
   try {
     const result = await pool.query(
-      "UPDATE friend_requests SET status = $1, updated_at = NOW() " +
+      "UPDATE sandbox_friend_requests SET status = $1, updated_at = NOW() " +
       "WHERE id = $2 AND recipient_id = $3 AND status = 'pending' " +
       "RETURNING requester_id, recipient_id",
       [status, requestId, req.user.id]
@@ -437,7 +438,7 @@ io.use(async (socket, next) => {
     const token = cookies[COOKIE_NAME];
     if (!token) return next(new Error("AUTH_REQUIRED"));
     const result = await pool.query(
-      "SELECT u.id, u.username FROM sessions s JOIN users u ON u.id = s.user_id " +
+      "SELECT u.id, u.username FROM sandbox_sessions s JOIN sandbox_users u ON u.id = s.user_id " +
       "WHERE s.token_hash = $1 AND s.expires_at > NOW()",
       [sha256(token)]
     );
@@ -451,7 +452,7 @@ io.use(async (socket, next) => {
 
 async function isFriend(userA, userB) {
   const result = await pool.query(
-    "SELECT 1 FROM friend_requests WHERE status = 'accepted' " +
+    "SELECT 1 FROM sandbox_friend_requests WHERE status = 'accepted' " +
     "AND ((requester_id = $1 AND recipient_id = $2) " +
     "OR (requester_id = $2 AND recipient_id = $1)) LIMIT 1",
     [userA, userB]
@@ -460,7 +461,7 @@ async function isFriend(userA, userB) {
 }
 
 function getPublicUser(userId) {
-  return pool.query("SELECT id, username FROM users WHERE id = $1", [userId])
+  return pool.query("SELECT id, username FROM sandbox_users WHERE id = $1", [userId])
     .then((result) => result.rows[0] || null);
 }
 
