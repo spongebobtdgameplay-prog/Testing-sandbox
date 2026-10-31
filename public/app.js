@@ -516,6 +516,7 @@ function connectSocket() {
     activeCall.state = "connecting";
     if (activeCall.direction === "outgoing") {
       try {
+        await loadRtcConfiguration();
         await ensureLocalMedia(activeCall.video);
         await ensurePeerConnection();
         const offer = await peerConnection.createOffer();
@@ -719,6 +720,7 @@ async function acceptIncomingCall() {
   const callId = activeCall.callId;
   $("#acceptCall").disabled = true;
   try {
+    await loadRtcConfiguration();
     await ensureLocalMedia(activeCall.video);
     activeCall.state = "connecting";
     socket.emit("call:accept", { callId });
