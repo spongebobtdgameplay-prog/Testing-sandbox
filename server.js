@@ -229,13 +229,93 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
-app.get("/api/config", requireAuth, (_req, res) => {
+app.get("/api/config", requireAuth, async (_req, res) => {
+  const turnKeyId = String(process.env.CLOUDFLARE_TURN_KEY_ID || "").trim();
+  const turnApiToken = String(process.env.CLOUDFLARE_TURN_KEY_API_TOKEN || "").trim();
+
+  // Cloudflare issues short-lived TURN credentials. The permanent key and token
+  // remain on the server and are never sent to the browser.
+  if (turnKeyId || turnApiToken) {
+    if (!turnKeyId || !turnApiToken) {
+      return res.status(503).json({
+        error: "The TURN relay is not fully configured on the server.",
+        code: "TURN_NOT_CONFIGURED"
+      });
+    }
+
+    try {
+      const turnResponse = await fetch(
+        "https://rtc.live.cloudflare.com/v1/turn/keys/" +
+          encodeURIComponent(turnKeyId) +
+          "/credentials/generate-ice-servers",
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + turnApiToken,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ ttl: 86400 }),
+          signal: AbortSignal.timeout(10000)
+        }
+      );
+
+      if (!turnResponse.ok) {
+        console.error("Cloudflare TURN credential request failed with HTTP", turnResponse.status);
+        return res.status(503).json({
+          error: "The TURN relay could not issue connection credentials.",
+          code: "TURN_UNAVAILABLE"
+        });
+      }
+
+      const turnData = await turnResponse.json();
+      const cloudflareIceServers = Array.isArray(turnData?.iceServers)
+        ? turnData.iceServers.filter((entry) => {
+            if (!entry || typeof entry !== "object") return false;
+            const urls = Array.isArray(entry.urls) ? entry.urls : [entry.urls];
+            return urls.some((url) =>
+              typeof url === "string" && /^(stun|turn|turns):/i.test(url)
+            );
+          })
+        : [];
+      const hasTurnRelay = cloudflareIceServers.some((entry) => {
+        const urls = Array.isArray(entry.urls) ? entry.urls : [entry.urls];
+        return urls.some((url) => typeof url === "string" && /^turns?:/i.test(url));
+      });
+
+      if (!hasTurnRelay) {
+        console.error("Cloudflare TURN credential response did not contain a TURN server.");
+        return res.status(502).json({
+          error: "The TURN provider returned an incomplete configuration.",
+          code: "TURN_INVALID_RESPONSE"
+        });
+      }
+
+      return res.json({
+        rtcConfiguration: {
+          iceServers: cloudflareIceServers,
+          iceCandidatePoolSize: 4
+        },
+        turnConfigured: true,
+        turnProvider: "cloudflare"
+      });
+    } catch (error) {
+      console.error("Cloudflare TURN credential request failed:", error?.name || "UnknownError");
+      return res.status(503).json({
+        error: "The TURN relay is temporarily unavailable. Please retry.",
+        code: "TURN_UNAVAILABLE"
+      });
+    }
+  }
+
+  // Keep compatibility with an existing self-hosted coturn deployment.
   const iceServers = [{ urls: ["stun:stun.l.google.com:19302"] }];
   const turnUrls = String(process.env.TURN_URLS || "")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
-  if (turnUrls.length && process.env.TURN_SHARED_SECRET) {
+  const hasCustomTurn = turnUrls.length > 0 && Boolean(process.env.TURN_SHARED_SECRET);
+
+  if (hasCustomTurn) {
     const expiresAt = Math.floor(Date.now() / 1000) + 3600;
     const username = expiresAt + ":" + crypto.randomUUID();
     const credential = crypto.createHmac("sha1", process.env.TURN_SHARED_SECRET)
@@ -243,7 +323,12 @@ app.get("/api/config", requireAuth, (_req, res) => {
       .digest("base64");
     iceServers.push({ urls: turnUrls, username, credential });
   }
-  res.json({ rtcConfiguration: { iceServers, iceCandidatePoolSize: 4 } });
+
+  res.json({
+    rtcConfiguration: { iceServers, iceCandidatePoolSize: 4 },
+    turnConfigured: hasCustomTurn,
+    turnProvider: hasCustomTurn ? "custom" : null
+  });
 });
 
 app.post("/api/auth/register", authLimiter, requireDatabase, async (req, res) => {
