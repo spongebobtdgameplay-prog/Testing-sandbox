@@ -355,8 +355,8 @@ async function searchUsers(query) {
     return;
   }
   try {
-    const data = await api("/api/users/search?q=" + encodeURIComponent(query));
-    searchData = data.users || [];
+    const data = await api("/api/sandbox_users/search?q=" + encodeURIComponent(query));
+    searchData = data.sandbox_users || [];
     renderSearch();
   } catch (error) {
     if (error.status === 401) showAuth("Your session expired. Please sign in again.");
