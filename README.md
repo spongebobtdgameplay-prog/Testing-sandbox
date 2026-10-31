@@ -9,7 +9,7 @@ A Node.js + PostgreSQL friends/presence app with private one-to-one WebRTC voice
 - Username search and friend requests.
 - Online/offline presence through authenticated Socket.IO connections.
 - One-to-one voice calls and optional video calls using browser WebRTC.
-- Socket.IO is used only for call invitations and offer/answer/ICE signaling. Audio and video are sent peer-to-peer; the application server does not receive or record the media.
+- Socket.IO is used only for call invitations and offer/answer/ICE signaling. WebRTC encrypts audio/video in transit and sends it directly where possible, or through a configured TURN relay when direct connectivity is blocked. The application server does not receive or record the media.
 - Microphone and camera permissions are requested only after the user accepts or joins a call.
 - PostgreSQL tables are created with idempotent migrations on startup. Tables use the `sandbox_` prefix to avoid colliding with unrelated tables in the supplied database.
 
