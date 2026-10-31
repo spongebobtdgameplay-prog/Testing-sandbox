@@ -230,6 +230,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/config", requireAuth, async (_req, res) => {
+  res.set("Cache-Control", "no-store");
   const turnKeyId = String(process.env.CLOUDFLARE_TURN_KEY_ID || "").trim();
   const turnApiToken = String(process.env.CLOUDFLARE_TURN_KEY_API_TOKEN || "").trim();
 
