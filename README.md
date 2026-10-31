@@ -1,6 +1,17 @@
 # Testing Sandbox
 
+**Quick links:** [Open the live app](https://testing-sandbox.onrender.com/) · [Browse the frontend folder](https://github.com/spongebobtdgameplay-prog/Testing-sandbox/tree/main/public) · [Open the frontend entry page](https://github.com/spongebobtdgameplay-prog/Testing-sandbox/blob/main/public/index.html)
+
 A Node.js + PostgreSQL friends/presence app with private one-to-one WebRTC voice and optional video calls.
+
+## Source layout
+
+- [`public/index.html`](https://github.com/spongebobtdgameplay-prog/Testing-sandbox/blob/main/public/index.html) — frontend page.
+- [`public/styles.css`](https://github.com/spongebobtdgameplay-prog/Testing-sandbox/blob/main/public/styles.css) — frontend styling.
+- [`public/app.js`](https://github.com/spongebobtdgameplay-prog/Testing-sandbox/blob/main/public/app.js) — frontend behavior.
+- `server.js` — Node.js API and Socket.IO server.
+
+The repository currently uses the `main` branch.
 
 ## What is included
 
