@@ -178,7 +178,7 @@ async function migrateDatabase() {
     "CHECK (requester_id <> recipient_id)" +
     "); " +
     "CREATE INDEX IF NOT EXISTS sandbox_friend_requests_requester_idx ON sandbox_friend_requests(requester_id, status); " +
-    "CREATE INDEX IF NOT EXISTS sandbox_friend_requests_recipient_idx ON sandbox_friend_requests(recipient_id, status);"
+    "CREATE INDEX IF NOT EXISTS sandbox_friend_requests_recipient_idx ON sandbox_friend_requests(recipient_id, status); CREATE UNIQUE INDEX IF NOT EXISTS sandbox_friend_requests_pair_active_unique ON sandbox_friend_requests (LEAST(requester_id, recipient_id), GREATEST(requester_id, recipient_id)) WHERE status IN ('pending', 'accepted');"
   );
 }
 
@@ -221,7 +221,7 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
-app.get("/api/config", (_req, res) => {
+app.get("/api/config", requireAuth, (_req, res) => {
   const iceServers = [{ urls: ["stun:stun.l.google.com:19302"] }];
   const turnUrls = String(process.env.TURN_URLS || "")
     .split(",")
@@ -506,8 +506,12 @@ io.on("connection", (socket) => {
         return emitSocketError(socket, "That friend is offline.", "USER_OFFLINE");
       }
       const activeForCaller = Array.from(activeCalls.values()).some((call) => call.participants.includes(userId));
+      const pendingForEither = Array.from(pendingCalls.values()).some((call) =>
+        call.callerId === userId || call.calleeId === userId ||
+        call.callerId === targetId || call.calleeId === targetId
+      );
       const activeForTarget = Array.from(activeCalls.values()).some((call) => call.participants.includes(targetId));
-      if (activeForCaller || activeForTarget) {
+      if (activeForCaller || activeForTarget || pendingForEither) {
         return emitSocketError(socket, "One of the players is already in a call.", "CALL_BUSY");
       }
       const callId = crypto.randomUUID();
@@ -592,7 +596,19 @@ io.on("connection", (socket) => {
 
   socket.on("call:end", (payload) => {
     const callId = payload && payload.callId;
-    if (callId) endCall(callId, userId, "ended");
+    if (!callId) return;
+    if (endCall(callId, userId, "ended")) return;
+    const pending = pendingCalls.get(callId);
+    if (pending && (pending.callerId === userId || pending.calleeId === userId)) {
+      pendingCalls.delete(callId);
+      for (const participantId of [pending.callerId, pending.calleeId]) {
+        io.to("user:" + participantId).emit("call:ended", {
+          callId,
+          byUserId: userId,
+          reason: "cancelled"
+        });
+      }
+    }
   });
 
   socket.on("disconnect", () => {
