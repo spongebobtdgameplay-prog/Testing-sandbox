@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#11121a">
+  <meta name="description" content="Testing Sandbox — friends, presence, and private voice/video calls.">
+  <title>Testing Sandbox</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/socket.io/socket.io.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+
+  <main id="authView" class="auth-shell">
+    <section class="auth-card">
+      <div class="brand-mark">TS</div>
+      <p class="eyebrow">A private place to connect</p>
+      <h1>Testing Sandbox</h1>
+      <p class="muted auth-intro">Find your people. Start a call. Stay connected.</p>
+
+      <div class="auth-switch" role="tablist" aria-label="Account access">
+        <button id="loginTab" class="switch-button active" type="button" role="tab" aria-selected="true">Sign in</button>
+        <button id="registerTab" class="switch-button" type="button" role="tab" aria-selected="false">Create account</button>
+      </div>
+
+      <form id="authForm" class="stack">
+        <label class="field-label" for="username">Username</label>
+        <input id="username" name="username" class="field" type="text" minlength="3" maxlength="24" autocomplete="username" placeholder="Your username" required>
+        <label class="field-label" for="password">Password</label>
+        <input id="password" name="password" class="field" type="password" minlength="10" maxlength="72" autocomplete="current-password" placeholder="At least 10 characters" required>
+        <p id="authHint" class="hint">Welcome back. Sign in to see your friends.</p>
+        <button id="authSubmit" class="button button-primary full-width" type="submit">Sign in</button>
+      </form>
+      <p id="authMessage" class="message" role="status" aria-live="polite"></p>
+      <p class="fine-print">Calls are peer-to-peer. Your microphone and camera only turn on after you choose to join a call.</p>
+    </section>
+  </main>
+
+  <div id="appView" class="app-shell" hidden>
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark small">TS</div>
+        <div>
+          <strong>Testing Sandbox</strong>
+          <span class="brand-subtitle">hang out, your way</span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <span id="connectionState" class="connection-state"><i></i> Connecting</span>
+        <div class="account-chip"><span id="avatarLetter" class="avatar avatar-small">?</span><span id="topUsername">Player</span></div>
+        <button id="logoutButton" class="icon-button" type="button" aria-label="Sign out" title="Sign out">↗</button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar">
+        <div class="sidebar-heading">
+          <div>
+            <p class="eyebrow">Your space</p>
+            <h2>Friends</h2>
+          </div>
+          <span id="friendCount" class="count-pill">0</span>
+        </div>
+
+        <div class="search-box">
+          <span class="search-glyph">⌕</span>
+          <input id="userSearch" type="search" autocomplete="off" placeholder="Find people">
+        </div>
+        <section id="searchResults" class="search-results" aria-live="polite"></section>
+
+        <div class="section-label"><span>ONLINE</span><span id="onlineCount">0</span></div>
+        <section id="onlineFriends" class="friend-list"></section>
+
+        <div class="section-label offline-label"><span>ALL FRIENDS</span><span id="allFriendCount">0</span></div>
+        <section id="offlineFriends" class="friend-list"></section>
+
+        <div class="section-label request-heading"><span>FRIEND REQUESTS</span><span id="requestCount">0</span></div>
+        <section id="friendRequests" class="request-list"></section>
+
+        <div class="sidebar-footer">
+          <span class="status-dot"></span>
+          <span>Private calls · No hidden access</span>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <div class="welcome-banner">
+          <div class="welcome-copy">
+            <p class="eyebrow">YOUR PEOPLE, ONE CLICK AWAY</p>
+            <h1>Good to see you, <span id="welcomeName">friend</span>.</h1>
+            <p class="muted">Add a friend, see who's around, and start a private voice or video call.</p>
+          </div>
+          <div class="orb-art" aria-hidden="true"><span></span><i></i><b></b></div>
+        </div>
+
+        <section class="quick-actions">
+          <article class="action-card">
+            <div class="action-icon violet">＋</div>
+            <div><h3>Find your people</h3><p>Search by username and send a friend request.</p></div>
+            <button id="focusSearch" class="text-button" type="button">Find friends <span>→</span></button>
+          </article>
+          <article class="action-card">
+            <div class="action-icon mint">◉</div>
+            <div><h3>Start a call</h3><p>Voice or optional camera, with permission prompts.</p></div>
+            <span class="secure-tag">Private by design</span>
+          </article>
+        </section>
+
+        <section class="people-section">
+          <div class="section-title-row">
+            <div><p class="eyebrow">YOUR CIRCLE</p><h2>People you know</h2></div>
+            <span id="peopleSummary" class="muted small-text">No friends yet</span>
+          </div>
+          <div id="peopleGrid" class="people-grid">
+            <div class="empty-state">
+              <div class="empty-symbol">✳</div>
+              <h3>Your circle starts here</h3>
+              <p>Search for a username to add someone. When they're online, you can call them.</p>
+              <button id="emptySearchButton" class="button button-secondary" type="button">Find someone</button>
+            </div>
+          </div>
+        </section>
+        <p id="globalMessage" class="global-message" role="status" aria-live="polite"></p>
+      </main>
+    </div>
+  </div>
+
+  <section id="callSheet" class="call-sheet" role="dialog" aria-modal="true" aria-labelledby="callTitle" hidden>
+    <div class="call-window">
+      <div class="call-topline">
+        <div><p class="eyebrow">PRIVATE CALL</p><h2 id="callTitle">Calling</h2><p id="callStatus" class="muted">Waiting for your friend…</p></div>
+        <span class="privacy-chip"><span></span> Peer-to-peer</span>
+      </div>
+      <div id="incomingControls" class="incoming-controls" hidden>
+        <p id="incomingText">Someone is calling you.</p>
+        <div class="button-row centered">
+          <button id="acceptCall" class="button button-primary" type="button">Accept call</button>
+          <button id="declineCall" class="button button-danger" type="button">Decline</button>
+        </div>
+      </div>
+      <div id="videoStage" class="video-stage" hidden>
+        <div class="remote-video-wrap">
+          <video id="remoteVideo" autoplay playsinline></video>
+          <div id="remoteVideoPlaceholder" class="video-placeholder"><span id="remoteInitial">?</span><small>Waiting for video…</small></div>
+          <video id="localVideo" class="local-video" autoplay playsinline muted></video>
+        </div>
+        <audio id="remoteAudio" autoplay></audio>
+      </div>
+      <div id="audioStage" class="audio-stage">
+        <div id="callAvatar" class="call-avatar">?</div>
+        <div class="wave-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <span id="audioStageName" class="muted">Voice call</span>
+      </div>
+      <div id="activeControls" class="call-controls" hidden>
+        <button id="muteButton" class="control-button" type="button" aria-label="Mute microphone"><span>🎙</span><small>Mute</small></button>
+        <button id="cameraButton" class="control-button" type="button" aria-label="Turn camera off"><span>▣</span><small>Camera</small></button>
+        <button id="hangupButton" class="control-button hangup" type="button" aria-label="End call"><span>☎</span><small>Leave</small></button>
+      </div>
+      <p class="call-footnote">Your microphone and camera are only requested when you accept or join. Other users and staff cannot secretly access them.</p>
+    </div>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
