@@ -23,6 +23,7 @@ let remoteStream = null;
 let rtcConfiguration = { iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] };
 let pendingIceCandidates = [];
 let searchTimer = null;
+let searchRequestId = 0;
 let toastTimer = null;
 
 async function api(url, options) {
@@ -45,6 +46,27 @@ async function api(url, options) {
 function setMessage(node, message, isError) {
   node.textContent = message || "";
   node.classList.toggle("is-error", Boolean(isError));
+}
+
+function notifyDesktop(title, body) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  try {
+    const notification = new Notification(title, { body, tag: "testing-sandbox-" + title });
+    setTimeout(() => notification.close(), 8000);
+  } catch (_error) {}
+}
+
+function updateNotificationButton() {
+  const button = $("#enableNotifications");
+  if (!button || !("Notification" in window)) return;
+  if (Notification.permission === "granted") {
+    button.textContent = "Notifications on";
+    button.disabled = true;
+  } else if (Notification.permission === "denied") {
+    button.textContent = "Notifications blocked";
+    button.disabled = true;
+    button.title = "Allow notifications for this site in your browser settings.";
+  }
 }
 
 function toast(message) {
@@ -131,6 +153,15 @@ authForm.addEventListener("submit", async (event) => {
     authSubmit.textContent = authMode === "register" ? "Create account" : "Sign in";
   }
 });
+
+$("#enableNotifications").addEventListener("click", async () => {
+  if (!("Notification" in window)) return toast("This browser does not support desktop notifications.");
+  const permission = await Notification.requestPermission();
+  updateNotificationButton();
+  if (permission === "granted") toast("Notifications are enabled.");
+  else toast("Notifications were not enabled.");
+});
+updateNotificationButton();
 
 $("#loginTab").addEventListener("click", () => setAuthMode("login"));
 $("#registerTab").addEventListener("click", () => setAuthMode("register"));
@@ -349,6 +380,7 @@ function renderSearch() {
 }
 
 async function searchUsers(query) {
+  const requestId = ++searchRequestId;
   if (query.length < 2) {
     searchData = [];
     renderSearch();
@@ -356,6 +388,7 @@ async function searchUsers(query) {
   }
   try {
     const data = await api("/api/sandbox_users/search?q=" + encodeURIComponent(query));
+    if (requestId !== searchRequestId || query !== $("#userSearch").value.trim()) return;
     searchData = data.sandbox_users || [];
     renderSearch();
   } catch (error) {
@@ -437,7 +470,9 @@ function connectSocket() {
     }
   });
   socket.on("friend:request", (payload) => {
-    toast((payload.from && payload.from.username || "Someone") + " sent you a friend request.");
+    const sender = payload.from && payload.from.username || "Someone";
+    toast(sender + " sent you a friend request.");
+    notifyDesktop("Friend request", sender + " sent you a friend request.");
     refreshFriends();
   });
   socket.on("friend:response", () => refreshFriends());
@@ -447,6 +482,7 @@ function connectSocket() {
       socket.emit("call:reject", { callId: payload.callId });
       return;
     }
+    notifyDesktop("Incoming call", (payload.from && payload.from.username || "A friend") + " is calling you.");
     activeCall = {
       callId: payload.callId,
       peerId: payload.from.id,
