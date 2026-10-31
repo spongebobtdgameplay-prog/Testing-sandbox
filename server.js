@@ -61,6 +61,14 @@ const authLimiter = rateLimit({
   message: { error: "Too many sign-in attempts. Please try again later." }
 });
 
+const friendRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 30,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  message: { error: "Too many friend requests. Please try again later." }
+});
+
 function sha256(value) {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
@@ -354,7 +362,7 @@ app.get("/api/friends", requireAuth, async (req, res) => {
   }
 });
 
-app.post("/api/friends/requests", requireAuth, async (req, res) => {
+app.post("/api/friends/requests", requireAuth, friendRequestLimiter, async (req, res) => {
   const recipientId = req.body && req.body.userId;
   if (!validUuid(recipientId) || recipientId === req.user.id) {
     return res.status(400).json({ error: "Choose a valid player." });
@@ -387,6 +395,9 @@ app.post("/api/friends/requests", requireAuth, async (req, res) => {
     });
     res.status(201).json({ ok: true, requestId: id });
   } catch (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({ error: "A friend request or friendship already exists." });
+    }
     console.error("Friend request failed:", error.message);
     res.status(500).json({ error: "Could not send friend request." });
   }
