@@ -546,7 +546,14 @@ function connectSocket() {
       if (byOther) toast("The other person left the call.");
     }
   });
-  socket.on("app:error", (payload) => toast(payload && payload.message || "Action failed."));
+  socket.on("app:error", (payload) => {
+    const message = payload && payload.message || "Action failed.";
+    const code = payload && payload.code;
+    if (activeCall && ["INVALID_CALL_TARGET", "NOT_FRIENDS", "USER_OFFLINE", "CALL_BUSY", "CALL_FAILED", "CALL_EXPIRED"].includes(code)) {
+      stopCallLocally();
+    }
+    toast(message);
+  });
 }
 
 function renderCall() {
