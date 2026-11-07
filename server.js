@@ -244,6 +244,9 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.get("/api/config", requireAuth, (_req, res) => {
+  // TURN REST credentials are short-lived and must not be stored by caches.
+  res.set("Cache-Control", "no-store, private");
+  res.set("Pragma", "no-cache");
   const iceServers = [{ urls: ["stun:stun.l.google.com:19302"] }];
   const turnUrls = String(process.env.TURN_URLS || "")
     .split(",")
