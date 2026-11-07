@@ -78,6 +78,20 @@ function validUuid(value) {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+function validCallSignal(type, data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  let serialized;
+  try { serialized = JSON.stringify(data); } catch (_error) { return false; }
+  if (!serialized || serialized.length > 80000) return false;
+  if (type === "offer" || type === "answer") {
+    return data.type === type && typeof data.sdp === "string" && data.sdp.length <= 60000;
+  }
+  if (type === "ice") {
+    return typeof data.candidate === "string" && data.candidate.length <= 4096;
+  }
+  return false;
+}
+
 function setSessionCookie(res, token) {
   res.cookie(COOKIE_NAME, token, {
     httpOnly: true,
@@ -216,7 +230,7 @@ async function broadcastPresence(userId, isOnline) {
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  maxHttpBufferSize: 1e6,
+  maxHttpBufferSize: 256 * 1024,
   pingInterval: 25000,
   pingTimeout: 20000
 });
@@ -243,7 +257,13 @@ app.get("/api/config", requireAuth, (_req, res) => {
       .digest("base64");
     iceServers.push({ urls: turnUrls, username, credential });
   }
-  res.json({ rtcConfiguration: { iceServers, iceCandidatePoolSize: 4 } });
+  res.json({
+    rtcConfiguration: { iceServers, iceCandidatePoolSize: 4 },
+    turnConfigured: iceServers.some((server) => {
+      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+      return urls.some((url) => typeof url === "string" && /^turns?:/i.test(url));
+    })
+  });
 });
 
 app.post("/api/auth/register", authLimiter, requireDatabase, async (req, res) => {
@@ -444,6 +464,19 @@ function emitSocketError(socket, message, code) {
 
 io.use(async (socket, next) => {
   if (!pool || !dbReady) return next(new Error("DATABASE_UNAVAILABLE"));
+  const origin = socket.handshake.headers.origin;
+  const requestHost = socket.handshake.headers.host;
+  if (origin) {
+    try {
+      const parsedOrigin = new URL(origin);
+      if (!requestHost || parsedOrigin.host.toLowerCase() !== requestHost.toLowerCase() ||
+          !["http:", "https:"].includes(parsedOrigin.protocol)) {
+        return next(new Error("ORIGIN_REJECTED"));
+      }
+    } catch (_error) {
+      return next(new Error("ORIGIN_REJECTED"));
+    }
+  }
   try {
     const cookies = parseCookie(socket.handshake.headers.cookie || "");
     const token = cookies[COOKIE_NAME];
@@ -591,9 +624,7 @@ io.on("connection", (socket) => {
     const type = payload && payload.type;
     const data = payload && payload.data;
     const call = activeCalls.get(callId);
-    if (!call || !call.participants.includes(userId) ||
-        !["offer", "answer", "ice"].includes(type) ||
-        !data || JSON.stringify(data).length > 100000) {
+    if (!call || !call.participants.includes(userId) || !validCallSignal(type, data)) {
       return;
     }
     const peerId = call.participants.find((participantId) => participantId !== userId);

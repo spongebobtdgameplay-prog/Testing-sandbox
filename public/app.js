@@ -84,6 +84,31 @@ function avatarFor(name, className) {
   return node;
 }
 
+function createCameraIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const icon = document.createElementNS(ns, "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("aria-hidden", "true");
+  icon.setAttribute("focusable", "false");
+  const body = document.createElementNS(ns, "rect");
+  body.setAttribute("x", "3");
+  body.setAttribute("y", "6");
+  body.setAttribute("width", "12");
+  body.setAttribute("height", "12");
+  body.setAttribute("rx", "2");
+  body.setAttribute("fill", "none");
+  body.setAttribute("stroke", "currentColor");
+  body.setAttribute("stroke-width", "1.8");
+  const lens = document.createElementNS(ns, "path");
+  lens.setAttribute("d", "M15 10l6-3v10l-6-3z");
+  lens.setAttribute("fill", "none");
+  lens.setAttribute("stroke", "currentColor");
+  lens.setAttribute("stroke-width", "1.8");
+  lens.setAttribute("stroke-linejoin", "round");
+  icon.append(body, lens);
+  return icon;
+}
+
 function setAuthMode(mode) {
   authMode = mode;
   const isRegister = mode === "register";
@@ -128,9 +153,21 @@ async function loadRtcConfiguration() {
   try {
     const data = await api("/api/config");
     if (data && data.rtcConfiguration) rtcConfiguration = data.rtcConfiguration;
+    return Boolean(data && data.turnConfigured);
   } catch (_error) {
-    // STUN fallback remains available if optional configuration cannot load.
+    // Keep the public STUN fallback if the optional TURN configuration is unavailable.
+    return false;
   }
+}
+
+function hasTurnRelay() {
+  const servers = rtcConfiguration && Array.isArray(rtcConfiguration.iceServers)
+    ? rtcConfiguration.iceServers
+    : [];
+  return servers.some((server) => {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+    return urls.some((url) => typeof url === "string" && /^turns?:/i.test(url));
+  });
 }
 
 authForm.addEventListener("submit", async (event) => {
@@ -334,8 +371,9 @@ function renderPeople() {
     voice.addEventListener("click", () => startCall(friend, false));
     const video = document.createElement("button");
     video.type = "button";
-    video.textContent = "▣";
+    video.appendChild(createCameraIcon());
     video.title = "Video call";
+    video.setAttribute("aria-label", "Start video call with " + friend.username);
     video.disabled = !friend.online;
     video.addEventListener("click", () => startCall(friend, true));
     actions.append(voice, video);
@@ -615,6 +653,8 @@ async function startCall(friend, video) {
   if (!socket || !socket.connected) return toast("Still connecting to the call server. Try again in a moment.");
   if (activeCall) return toast("Finish your current call first.");
   if (!friend.online) return toast("That friend is offline.");
+  // TURN REST credentials expire; refresh them immediately before each call.
+  await loadRtcConfiguration();
   activeCall = {
     callId: null,
     peerId: friend.id,
@@ -634,14 +674,22 @@ async function ensureLocalMedia(video) {
     throw new Error("This browser does not support camera or microphone access.");
   }
   localStream = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: { ideal: 1 }
+    },
     video: video ? {
       width: { ideal: 1280 },
       height: { ideal: 720 },
       frameRate: { ideal: 30, max: 30 }
     } : false
   });
-  $("#localVideo").srcObject = localStream;
+  const localVideoElement = $("#localVideo");
+  localVideoElement.muted = true;
+  localVideoElement.volume = 0;
+  localVideoElement.srcObject = localStream;
   $("#remoteVideoPlaceholder").hidden = false;
   $("#muteButton").classList.remove("active");
   $("#cameraButton").classList.remove("active");
@@ -652,8 +700,15 @@ async function ensurePeerConnection() {
   if (peerConnection) return peerConnection;
   peerConnection = new RTCPeerConnection(rtcConfiguration);
   remoteStream = new MediaStream();
-  $("#remoteVideo").srcObject = remoteStream;
-  $("#remoteAudio").srcObject = remoteStream;
+  const remoteVideoElement = $("#remoteVideo");
+  // The separate audio element is the sole remote audio output. Muting the
+  // video element prevents the same remote audio track playing twice.
+  remoteVideoElement.muted = true;
+  remoteVideoElement.volume = 0;
+  remoteVideoElement.srcObject = remoteStream;
+  const remoteAudioElement = $("#remoteAudio");
+  remoteAudioElement.muted = false;
+  remoteAudioElement.srcObject = remoteStream;
   $("#remoteVideo").onloadedmetadata = () => {
     $("#remoteVideoPlaceholder").hidden = true;
     $("#remoteVideo").play().catch(() => {});
@@ -692,7 +747,9 @@ async function ensurePeerConnection() {
       activeCall.state = "connected";
       renderCall();
     } else if (state === "failed") {
-      $("#callStatus").textContent = "Could not connect. A TURN relay may be needed on this network.";
+      $("#callStatus").textContent = hasTurnRelay()
+        ? "The media connection failed. Check the TURN relay or network and try again."
+        : "No TURN relay is configured. Calls may fail on restrictive Wi-Fi or mobile networks.";
     } else if (state === "disconnected") {
       $("#callStatus").textContent = "Reconnecting media…";
     }
@@ -708,6 +765,8 @@ async function acceptIncomingCall() {
   const callId = activeCall.callId;
   $("#acceptCall").disabled = true;
   try {
+    // Fetch a fresh, short-lived TURN credential before accepting.
+    await loadRtcConfiguration();
     await ensureLocalMedia(activeCall.video);
     activeCall.state = "connecting";
     socket.emit("call:accept", { callId });
@@ -782,6 +841,7 @@ $("#cameraButton").addEventListener("click", () => {
   tracks.forEach((track) => { track.enabled = enabled; });
   $("#cameraButton").classList.toggle("active", !enabled);
   $("#cameraButton").querySelector("small").textContent = enabled ? "Camera" : "Camera off";
+  $("#cameraButton").setAttribute("aria-label", enabled ? "Turn camera off" : "Turn camera on");
 });
 
 async function loadCurrentUser() {
