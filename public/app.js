@@ -151,7 +151,7 @@ async function enterApp(user) {
 
 async function loadRtcConfiguration() {
   try {
-    const data = await api("/api/config");
+    const data = await api("/api/config", { cache: "no-store" });
     if (data && data.rtcConfiguration) rtcConfiguration = data.rtcConfiguration;
     return Boolean(data && data.turnConfigured);
   } catch (_error) {
